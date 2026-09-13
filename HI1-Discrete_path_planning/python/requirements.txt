@@ -1,0 +1,16 @@
+ipython
+numpy
+jupyter
+jupyterlab
+matplotlib
+scipy
+seaborn
+casadi
+scikit-learn
+torch
+gymnasium
+highway-env
+torchinfo
+flake8
+black
+
