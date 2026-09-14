@@ -166,6 +166,7 @@ def ara(num_nodes, mission, f_next, heuristic=cost_to_go, num_controls=0, c_star
 
     while not OPEN.IsEmpty():
         x, _ = OPEN.pop()
+        CLOSED.add(x)
         expanded_nodes.append(x)
         if x == goalNode:
             foundPlan = True
@@ -175,12 +176,21 @@ def ara(num_nodes, mission, f_next, heuristic=cost_to_go, num_controls=0, c_star
         for xi, ui, di in zip(neighbours, u, d):
             new_cost = cost_to_come[x] + di
 
-            if previous[xi] == unvis_node or new_cost < cost_to_come[xi]:
-                previous[xi] = x
-                q.insert(priority= new_cost + c * heuristic(xi,goalNode), x=xi)
-                cost_to_come[xi] = cost_to_come[x] + di
-                if num_controls > 0:
-                    control_to_come[xi] = ui
+    if new_cost < cost_to_come[xi]:
+
+        cost_to_come[xi] = new_cost
+        previous[xi] = x
+
+    if xi not in CLOSED:
+        OPEN.insert(
+            x=xi,
+            priority=new_cost + c * heuristic(xi, goalNode)
+        )
+    else:
+        INCONS.add(xi)
+
+    if num_controls > 0:
+        control_to_come[xi] = ui
 
 
     # Recreate the plan by traversing previous from goal node
