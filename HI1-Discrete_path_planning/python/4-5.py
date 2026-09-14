@@ -139,26 +139,33 @@ def inflated_heuristic(x, xg, c):
     return c * cost_to_go(x, xg)
 
 
-def astar(num_nodes, mission, f_next, heuristic=cost_to_go, num_controls=0):
+def ara(num_nodes, mission, f_next, heuristic=cost_to_go, num_controls=0, c_start=3.0, c_step=0.5):
     """Depth first planner."""
     t = Timer()
     t.tic()
 
-    unvis_node = -1
-    previous = np.full(num_nodes, dtype=int, fill_value=unvis_node)
-    cost_to_come = np.zeros(num_nodes)
-    control_to_come = np.zeros((num_nodes, num_controls), dtype=int)
-    expanded_nodes = []
 
     startNode = mission["start"]["id"]
     goalNode = mission["goal"]["id"]
 
-    q = PriorityQueue()
-    q.insert(x=startNode, priority=heuristic(startNode, goalNode))
+    unvis_node = -1
+    previous = np.full(num_nodes, dtype=int, fill_value=unvis_node)
+    cost_to_come = np.full(num_nodes, np.inf)
+    cost_to_come[startNode] = 0
+    control_to_come = np.zeros((num_nodes, num_controls), dtype=int)
+    expanded_nodes = []
+
+    OPEN = PriorityQueue() #OPEN motsvarar gamla q i vanliga astar. (funna noder men ej undersökta)
+    CLOSED = set() #noder som har expanderats
+    INCONS = set() # noder som har expanderats men vars kostand kan förbättras efteråt
+
+    c = c_start
+
+    OPEN.insert(x=startNode, priority=cost_to_come[startNode] + c * heuristic(startNode, goalNode))
     foundPlan = False
 
-    while not q.IsEmpty():
-        x, _ = q.pop()
+    while not OPEN.IsEmpty():
+        x, _ = OPEN.pop()
         expanded_nodes.append(x)
         if x == goalNode:
             foundPlan = True
@@ -170,7 +177,7 @@ def astar(num_nodes, mission, f_next, heuristic=cost_to_go, num_controls=0):
 
             if previous[xi] == unvis_node or new_cost < cost_to_come[xi]:
                 previous[xi] = x
-                q.insert(priority=new_cost + heuristic(xi,goalNode), x=xi)
+                q.insert(priority= new_cost + c * heuristic(xi,goalNode), x=xi)
                 cost_to_come[xi] = cost_to_come[x] + di
                 if num_controls > 0:
                     control_to_come[xi] = ui
