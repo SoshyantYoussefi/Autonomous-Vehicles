@@ -140,7 +140,9 @@ def inflated_heuristic(x, xg, c):
 
 
 def ara(num_nodes, mission, f_next, heuristic=cost_to_go, num_controls=0, c_start=3.0, c_step=0.5):
-    """Depth first planner."""
+    """ARA*: förbättra planen tills c = 1."""
+    if not np.isfinite(c_start) or c_start < 1 or not np.isfinite(c_step) or c_step <= 0:
+        raise ValueError("c_start måste vara >= 1 och c_step > 0, båda ändliga.")
     t = Timer()
     t.tic()
 
@@ -154,43 +156,61 @@ def ara(num_nodes, mission, f_next, heuristic=cost_to_go, num_controls=0, c_star
     cost_to_come[startNode] = 0
     control_to_come = np.zeros((num_nodes, num_controls), dtype=int)
     expanded_nodes = []
+    history = []  # Resultat för varje epsilon.
 
-    OPEN = PriorityQueue() #OPEN motsvarar gamla q i vanliga astar. (funna noder men ej undersökta)
-    CLOSED = set() #noder som har expanderats
-    INCONS = set() # noder som har expanderats men vars kostand kan förbättras efteråt
+    OPEN = PriorityQueue()  # Väntande noder.
+    CLOSED = set()  # Expanderade noder.
+    INCONS = set()  # Förbättrade, redan expanderade noder.
 
     c = c_start
 
     OPEN.insert(x=startNode, priority=cost_to_come[startNode] + c * heuristic(startNode, goalNode))
     foundPlan = False
 
-    while not OPEN.IsEmpty():
-        x, _ = OPEN.pop()
-        CLOSED.add(x)
-        expanded_nodes.append(x)
-        if x == goalNode:
-            foundPlan = True
+    while True:
+        # Förbättra tills målkostnaden är lägst.
+        while not OPEN.IsEmpty() and cost_to_come[goalNode] > OPEN.peek()[1]:
+            x, _ = OPEN.pop()
+            CLOSED.add(x)
+            expanded_nodes.append(x)
+            neighbours, u, d = f_next(x)
+
+            for xi, ui, di in zip(neighbours, u, d):
+                new_cost = cost_to_come[x] + di
+
+                if new_cost < cost_to_come[xi]:
+
+                    cost_to_come[xi] = new_cost
+                    previous[xi] = x
+
+                    if xi not in CLOSED:
+                        priority = new_cost + c * heuristic(xi, goalNode)
+                        if OPEN.ismember(xi):
+                            OPEN.update_key(xi, priority)  # Undvik dubbletter.
+                        else:
+                            OPEN.insert(x=xi, priority=priority)
+                    else:
+                        INCONS.add(xi)
+
+                    if num_controls > 0:
+                        control_to_come[xi] = ui
+
+        foundPlan = np.isfinite(cost_to_come[goalNode])
+        history.append({"c": c, "length": cost_to_come[goalNode], "time": t.toc()})
+        if c == 1.0 and not INCONS:
             break
-        neighbours, u, d = f_next(x)
+        if OPEN.IsEmpty() and not INCONS:
+            break
 
-        for xi, ui, di in zip(neighbours, u, d):
-            new_cost = cost_to_come[x] + di
-
-    if new_cost < cost_to_come[xi]:
-
-        cost_to_come[xi] = new_cost
-        previous[xi] = x
-
-    if xi not in CLOSED:
-        OPEN.insert(
-            x=xi,
-            priority=new_cost + c * heuristic(xi, goalNode)
-        )
-    else:
-        INCONS.add(xi)
-
-    if num_controls > 0:
-        control_to_come[xi] = ui
+        c = max(1.0, c - c_step)  # Minska heuristikens vikt.
+        pending = set(INCONS)
+        while not OPEN.IsEmpty():
+            x, _ = OPEN.pop()
+            pending.add(x)
+        for x in pending:  # Uppdatera alla prioriteringar.
+            OPEN.insert(x=x, priority=cost_to_come[x] + c * heuristic(x, goalNode))
+        INCONS.clear()
+        CLOSED.clear()  # Tillåt nya expansioner.
 
 
     # Recreate the plan by traversing previous from goal node
@@ -209,10 +229,11 @@ def ara(num_nodes, mission, f_next, heuristic=cost_to_go, num_controls=0, c_star
             "plan": plan,
             "length": length,
             "num_expanded_nodes": len(expanded_nodes),
-            "name": "DepthFirst",
+            "name": "ARA*",
             "time": t.toc(),
             "control": control,
             "expanded_nodes": expanded_nodes,
+            "history": history,
         }
 
 
@@ -234,18 +255,23 @@ c = 1
 def h_inflated(x, xg):
     return inflated_heuristic(x, xg, c)
 
-astar_plan = astar(
+ara_plan = ara(
     num_nodes,
     mission,
     f_next,
-    h_inflated
+    cost_to_go,
+    c_start=5.0,
+    c_step=0.5
 )
 
-print(
-    f"{astar_plan['length']:.1f} m, "
-    f"{astar_plan['num_expanded_nodes']} expanded nodes, "
-    f"planning time {astar_plan['time'] * 1e3:.1f} ms"
-)
+if ara_plan:
+    print(
+        f"{ara_plan['length']:.1f} m, "
+        f"{ara_plan['num_expanded_nodes']} expanded nodes, "
+        f"planning time {ara_plan['time'] * 1e3:.1f} ms"
+    )
+else:
+    print("Ingen väg hittades.")
 
 
 
@@ -282,13 +308,13 @@ print("Goal: " + plan_way_names[-1])
 # %% Assertions
 
 # Below are a few of tests on your implementations. Note, just b
-res_astar = astar(num_nodes, pre_mission[0], f_next, cost_to_go)
+res_astar = ara(num_nodes, pre_mission[0], f_next, cost_to_go)
 assert abs(res_astar["length"] - 5085.5957) < 1e-2
 
-res_astar = astar(num_nodes, pre_mission[1], f_next, cost_to_go)
+res_astar = ara(num_nodes, pre_mission[1], f_next, cost_to_go)
 assert abs(res_astar["length"] - 2646.2140) < 1e-2
 
-res_astar = astar(num_nodes, pre_mission[2], f_next, cost_to_go)
+res_astar = ara(num_nodes, pre_mission[2], f_next, cost_to_go)
 assert abs(res_astar["length"] - 1860.7143) < 1e-2
 
 # %% Investigations using all planners
