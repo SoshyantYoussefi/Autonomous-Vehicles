@@ -136,7 +136,6 @@ def cost_to_go(x, xg):
 
 
 def astar(num_nodes, mission, f_next, heuristic=cost_to_go, num_controls=0):
-    """Depth first planner."""
     t = Timer()
     t.tic()
 

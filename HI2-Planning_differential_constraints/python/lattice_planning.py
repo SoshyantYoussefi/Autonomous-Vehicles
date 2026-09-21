@@ -7,8 +7,15 @@ import matplotlib.pyplot as plt
 from planners import breadth_first, depth_first, dijkstra, astar, best_first
 from world import BoxWorld
 from motionprimitives import MotionPrimitives
+from plotters import (
+    plot_lattice_plan,
+    plot_motion_primitives,
+    plot_plan_lengths_vs_planning_times,
+    plot_planning_mission,
+    plot_planning_time_vs_visited_nodes,
+    plot_visited_nodes,
+)
 import os
-from seaborn import despine
 
 # Run instead if you want plots in external windows
 # %matplotlib
@@ -22,6 +29,12 @@ from seaborn import despine
 # %% Motion Primitives
 
 # Run CasADi to pre-compute all motion primitives and save results in a pickle file for later re-use
+
+# Vehicle parameters and constraints. They are also used by the heuristics
+# when the motion primitives are loaded from an existing file.
+L = 1.5  # Wheel base (m)
+v = 15  # Constant velocity (m/s)
+u_max = np.pi / 4  # Maximum steering angle (rad)
 
 file_name = "mprims.pickle"
 if os.path.exists(file_name):
@@ -41,11 +54,6 @@ else:
     )
     state_0 = np.column_stack((x_vec, y_vec, th_vec))
 
-    # Vehicle parameters and constraints
-    L = 1.5  # Wheel base (m)
-    v = 15  # Constant velocity (m/s)
-    u_max = np.pi / 4  # Maximum steering angle (rad)
-
     # Construct a MotionPrimitives object and generate the
     # motion primitives using the constructed lattice and
     # specification of the motion primitives
@@ -56,12 +64,7 @@ else:
 
 # Plot the computed motion primitives
 
-_, ax = plt.subplots(num=10, clear=True)
-mp.plot("b", lw=0.5)
-ax.set_xlabel("x [m]")
-ax.set_ylabel("y [m]")
-ax.set_title("Motion primitives")
-despine()
+# plot_motion_primitives(mp)
 
 
 # %% Define Planning Mission
@@ -76,7 +79,7 @@ th = np.array(
 
 world = BoxWorld((xx, yy, th))
 
-mission_nbr = 1
+mission_nbr = 4
 
 # Example planning missions
 
@@ -110,11 +113,6 @@ elif mission_nbr == 4:
     goal = [5, 6, 0]
 
 
-arrow_length = 1.0
-arrow_width = 0.075
-start_arrow = arrow_length * np.array([np.cos(start[2]), np.sin(start[2])])
-goal_arrow = arrow_length * np.array([np.cos(goal[2]), np.sin(goal[2])])
-
 # Define the initial and goal state for the graph search by finding the
 # node number (column number in world.st_sp) in the world state space
 
@@ -126,17 +124,7 @@ mission = {
 
 # Plot world and start and goal positions
 
-_, ax = plt.subplots(num=20, clear=True)
-world.draw()
-ax.set_xlabel("x")
-ax.set_ylabel("y")
-ax.plot(*start[0:2], "bo", markersize=8, label="start")
-ax.plot(*goal[0:2], "ko", markersize=8, label="goal")
-ax.arrow(*start[0:2], *start_arrow[0:2], width=arrow_width, edgecolor="b", facecolor="b")
-ax.arrow(*goal[0:2], *goal_arrow[0:2], width=arrow_width, edgecolor="k", facecolor="k")
-_ = ax.axis([world.xmin, world.xmax, world.ymin, world.ymax])
-ax.legend()
-despine()
+plot_planning_mission(world, start, goal)
 
 
 # %% Define State-Transition Function for Lattice Planner
@@ -235,40 +223,83 @@ next_state(mission["start"]["id"], world, mp, rev=False)
 
 n = world.num_nodes()
 
-
 # Define cost-to-go heuristic for planner
 
-
+# Euclidian
 def cost_to_go(x, xg):
     return np.linalg.norm(world.st_sp[0:2, x] - world.st_sp[0:2, xg])
 
 
-# Plan using all pre-defined planners from Hand-in Exercise 1
+# Euclidian + orientation penalty
+def angle_difference(a, b):
+    return abs((a - b + np.pi) % (2 * np.pi) - np.pi)
 
-all_planners = [breadth_first, depth_first, dijkstra, astar, best_first]
-res = [
-    planner(
+
+def h_cost_pose(x, xg, heading_weight=1.0):
+    position_cost = np.linalg.norm(
+        world.st_sp[:2, x] - world.st_sp[:2, xg]
+    )
+    heading_cost = heading_weight * angle_difference(
+        world.st_sp[2, x], world.st_sp[2, xg]
+    )
+    return position_cost + heading_cost
+
+
+def h_cost_curvature_lower_bound(x, xg):
+    """Lower bound based on position, heading, and minimum turning radius."""
+    position_cost = np.linalg.norm(
+        world.st_sp[:2, x] - world.st_sp[:2, xg]
+    )
+    minimum_turning_radius = L / np.tan(u_max)
+    heading_cost = minimum_turning_radius * angle_difference(
+        world.st_sp[2, x], world.st_sp[2, xg]
+    )
+    return max(position_cost, heading_cost)
+
+
+# Run A* with all heuristics on the same planning mission.
+heuristics = {
+    "A* - Euclidean": cost_to_go,
+    "A* - Euclidean + orientation": h_cost_pose,
+    "A* - Curvature lower bound": h_cost_curvature_lower_bound,
+}
+res = []
+for result_name, heuristic in heuristics.items():
+    result = astar(
         n,
         mission,
         lambda x: next_state(x, world, mp, rev=True),
-        heuristic=cost_to_go,
+        heuristic=heuristic,
         num_controls=3,
     )
-    for planner in all_planners
-]
+    if result:
+        result["name"] = result_name
+    res.append(result)
 
-opt_length = [r["length"] for r in res if r["name"] == "Dijkstra"][0]  # Dijkstra is optimal
-print(f"Optimal length: {opt_length:.3f}")
+for r in res:
+    if r:
+        print(
+            f"Method: {r['name']} \tLength: {r['length']:.3f}"
+            f" \tVisited nodes: {r['num_expanded_nodes']}"
+        )
+    else:
+        print("No plan found for a heuristic.")
+
+#opt_length = [r["length"] for r in res if r["name"] == "Dijkstra"][0]  # Dijkstra is optimal
+#print(f"Optimal length: {opt_length:.3f}")
 
 
 # %% Plots and Analysis
 
-# Hint: For see function ```mp.plan_to_path``` for useful information on how to plot resulting paths
+for result in res:
+    if not result:
+        print("No plan found for a planner.")
+        continue
+    plot_lattice_plan(world, mp, start, goal, result)
 
-help(mp.plan_to_path)
-
-
-# YOUR CODE HERE
+plot_plan_lengths_vs_planning_times(res)
+plot_planning_time_vs_visited_nodes({f"Mission {mission_nbr}": res})
+plot_visited_nodes(res)
 
 
 # %%
