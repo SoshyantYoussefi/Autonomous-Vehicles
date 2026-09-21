@@ -151,7 +151,7 @@ def rrt_diff(start, goal, u_c, sim, world, opts):
     parents = [0]  # Initial state has no parent
     state_trajectories = [start]  # No trajectory segment needed to reach start state
 
-    # YOUR CODE HERE
+
 
     Tplan = T.toc()
     goal_idx = np.argmin(distance_fcn(nodes, goal[:, None]), axis=0)

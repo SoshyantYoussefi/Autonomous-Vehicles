@@ -235,7 +235,6 @@ next_state(mission["start"]["id"], world, mp, rev=False)
 
 n = world.num_nodes()
 
-
 # Define cost-to-go heuristic for planner
 
 
@@ -257,18 +256,45 @@ res = [
     for planner in all_planners
 ]
 
+for r in res:
+    print(f"Method: {r['name']} \tLength: {r['length']:.3f}")
+
 opt_length = [r["length"] for r in res if r["name"] == "Dijkstra"][0]  # Dijkstra is optimal
 print(f"Optimal length: {opt_length:.3f}")
 
 
 # %% Plots and Analysis
 
-# Hint: For see function ```mp.plan_to_path``` for useful information on how to plot resulting paths
+# Plot each solution separately.  A segment is blue when the vehicle drives
+# forward and red when it reverses; ``plan_to_path`` returns the sample ranges
+# needed to keep the two directions visually distinct.
+for result in res:
+    if not result:
+        print("No plan found for a planner.")
+        continue
 
-help(mp.plan_to_path)
+    path, segments = mp.plan_to_path(start, result)
+    _, ax = plt.subplots(num=f"Lattice plan - {result['name']}", clear=True)
+    world.draw(ax=ax)
 
+    for direction, first, last in segments:
+        color = "tab:blue" if direction == 1 else "tab:red"
+        label = "forward" if direction == 1 else "reverse"
+        ax.plot(path[first:last, 0], path[first:last, 1], color=color, lw=2.5, label=label)
 
-# YOUR CODE HERE
+    ax.plot(*start[:2], "bo", markersize=8, label="start")
+    ax.plot(*goal[:2], "ko", markersize=8, label="goal")
+    ax.arrow(*start[:2], *start_arrow, width=arrow_width, edgecolor="b", facecolor="b")
+    ax.arrow(*goal[:2], *goal_arrow, width=arrow_width, edgecolor="k", facecolor="k")
+    ax.set(xlabel="x [m]", ylabel="y [m]", xlim=(world.xmin, world.xmax), ylim=(world.ymin, world.ymax))
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_title(f"{result['name']}: length = {result['length']:.2f} m")
+
+    # Avoid duplicate entries when a path changes direction more than once.
+    handles, labels = ax.get_legend_handles_labels()
+    by_label = dict(zip(labels, handles))
+    ax.legend(by_label.values(), by_label.keys())
+    despine(ax=ax)
 
 
 # %%
