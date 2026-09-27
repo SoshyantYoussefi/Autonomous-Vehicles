@@ -222,12 +222,15 @@ z_pp = car.simulate(w0, T=80, dt=0.1, t0=0.0)
 
 
 class StateFeedbackController(ControllerBase):
-    def __init__(self, K: float, L: float, path: SplinePath = None, goal_tol: float = 1.0):
+    def __init__(self, K: np.ndarray, L: float, path: SplinePath = None, goal_tol: float = 1.0):
         super().__init__()
         self.plan = path
-        self.K = K
+        self.K = np.asarray(K, dtype=float).reshape(-1)
+        if self.K.shape != (2,):
+            raise ValueError("K must contain two gains: [k_d, k_theta]")
         self.goal_tol = goal_tol
         self.d = []
+        self.theta_e = []
         self.L = L
         self.s0 = 0
 
@@ -241,24 +244,30 @@ class StateFeedbackController(ControllerBase):
             theta_e - heading error angle
         """
 
-        # YOUR CODE HERE
-        theta_e = 0.0
+        tangent, _ = self.plan.heading(s)
+        theta_path = np.arctan2(tangent[1], tangent[0])
+        # Wrap the difference to [-pi, pi] so crossing the angle boundary
+        # does not create a large, artificial heading error.
+        theta_e = np.arctan2(np.sin(theta - theta_path), np.cos(theta - theta_path))
         return theta_e
 
     def u(self, t, w):
         x, y, theta, v = w
         p_car = w[0:2]
 
-        # Compute d and theta_e errors. Use the SplinePath method project
-        # and the obj.heading_error() function you've written above
+        # project returns the path coordinate s and signed cross-track error d.
+        s, d = self.plan.project(p_car, self.s0)
+        self.s0 = s
+        theta_e = self.heading_error(theta, s)
+        self.d.append(d)
+        self.theta_e.append(theta_e)
 
-        # YOUR CODE HERE
-        d = 0
-        theta_e = 0
-
-        # Compute control signal delta
+        # Linear feedback on [cross-track error, heading error]. The feedforward
+        # term supplies the steering needed to follow the path curvature.
+        errors = np.array([d, theta_e])
+        delta_ff = np.arctan(self.L * self.plan.c(s))
+        delta = delta_ff - self.K @ errors
         acc = 0  # Constant speed
-        delta = 0  # Steering angle
 
         return np.array([delta, acc])
 
@@ -268,7 +277,7 @@ class StateFeedbackController(ControllerBase):
         dp = p_car - p_goal
         dist = np.sqrt(dp.dot(dp))
 
-        return dist > self.goal_tol**2
+        return dist > self.goal_tol
 
 
 # %%
