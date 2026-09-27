@@ -1,29 +1,39 @@
 # %% TSFS12 Hand-in Exercise 2: Planning for Vehicles with Differential Motion Constraints --- RRT with Motion Model for a Simple Car
 
-import numpy as np
-import matplotlib.pyplot as plt
-from misc import Timer
-from world import BoxWorld
 import math
 
-# Run instead if you want plots in external windows
-# %matplotlib
+import matplotlib.pyplot as plt
+import numpy as np
 
-
-# Run the ipython magic below to activate automated import of modules. Useful if you write code in external .py files.
-# %load_ext autoreload
-# %autoreload 2
+from misc import Timer
+from world import BoxWorld
 
 
 # %% Define the Planning World
 
-# Define world with obstacles
+mission_nbr = 3 
 
 world = BoxWorld([[0, 10], [0, 10]])
-world.add_box(0, 1, 2, 4)
-world.add_box(0, 6, 6, 4)
-world.add_box(4, 1, 6, 4)
-world.add_box(7, 7, 3, 3)
+if mission_nbr == 1:
+    world.add_box(0, 1, 2, 4)
+    world.add_box(0, 6, 6, 4)
+    world.add_box(4, 1, 6, 4)
+    world.add_box(7, 7, 3, 3)
+    start = np.array([1, 0, np.pi / 4])
+    goal = np.array([6.5, 9, np.pi / 2])
+elif mission_nbr == 2:
+    world.add_box(0, 1, 3, 4)
+    world.add_box(0, 7, 10, 3)
+    world.add_box(4, 1, 6, 4)
+    start = np.array([1, 0, 0])
+    goal = np.array([8, 6, np.pi / 2])
+elif mission_nbr == 3:
+    world.add_box(3, 0, 2, 6)
+    world.add_box(6, 4, 2, 6)
+    start = np.array([1, 1, 0])
+    goal = np.array([9, 9, np.pi / 2])
+else:
+    raise ValueError("mission_nbr must be 1, 2, or 3")
 
 _, ax = plt.subplots(num=10, clear=True)
 world.draw()
@@ -32,25 +42,11 @@ ax.set_ylabel("y")
 _ = ax.axis([world.xmin, world.xmax, world.ymin, world.ymax])
 
 
-# %% Car Simulation Function
-
-# Define function needed to simulate motion of single-track model
+# %% Car Simulation
 
 
 def sim_car(xk, u, step, h=0.01, L=1.5, v=15):
-    """Car simulator
-
-    Simulate car forward in time from state xk with time-step length step.
-    Returns next sequence of states.
-
-    x' = v*cos(th)
-    y' = v*sin(th)
-    th' = v*tan(delta)/L
-    u = delta
-    x = [x y th]
-    """
-
-    # Simulation with discretization using forward Euler
+    """Forward-Euler simulation of the kinematic single-track model."""
 
     t = 0
     N = int(step / h) + 1
@@ -69,40 +65,18 @@ def sim_car(xk, u, step, h=0.01, L=1.5, v=15):
     return states
 
 
-# %% Implementation of RRT for Kinematic Car Model
-#
-# Car model has two translational and one orientational degrees-of-freedom
+heading_weight = 0.0  # metres per radian; 0 means position-only distance
+
+
+# %% RRT for Kinematic Car Model
 
 
 def rrt_diff(start, goal, u_c, sim, world, opts):
-    """RRT planner for kinematic car model
-
-    Input arguments:
-     start - initial state
-     goal - desired goal state
-     u_c - vector with possible control actions (steering angles)
-     sim - function reference to the simulation model of the car motion
-     world - description of the map of the world
-             using an object from the class BoxWorld
-     opts - structure with options for the RRT
-
-    Output arguments:
-     goal_idx - index of the node closest to the desired goal state
-     nodes - 2 x N matrix with each column representing a state j
-             in the tree
-     parents - 1 x N vector with the node number for the parent of node j
-               at element j in the vector (node number counted as column
-               in the matrix nodes)
-     state_trajectories - a struct with the trajectory segment for
-                     reaching node j at element j (node number counted
-                     as column in the matrix nodes)
-     Tplan - the time taken for computing the plan
-    """
-
-    rg = np.random.default_rng()
+    """Build an RRT for a forward-only kinematic car."""
+    rg = np.random.default_rng(opts.get("seed"))
 
     def sample_free():
-        """Returns a state x in the free state space"""
+        """Sample a collision-free target pose, with optional goal bias."""
         if rg.uniform(0, 1) < opts["beta"]:
             return np.array(goal)
         else:
@@ -118,15 +92,19 @@ def rrt_diff(start, goal, u_c, sim, world, opts):
         return np.array([p[0], p[1], th])
 
     def nearest(x):
-        """Find index of state nearest to x in nodes"""
+        """Return the nearest node index."""
         return np.argmin(distance_fcn(nodes, x[:, None]))
 
     def steer_candidates(x_nearest, x_rand):
-        """Compute all possible paths for different steering control signals u_c
-        to move from x_nearest towards x_rand, without collision
-        If no valid paths are found, the returned variables are empty"""
+        """Return collision-free steering trajectories and their target distances."""
         new_paths = [sim(x_nearest, ui, opts["lambda"]) for ui in u_c]
-        new_free = np.where([world.obstacle_free(traj_i) for traj_i in new_paths])[0]
+        new_free = np.where(
+            [
+                world.obstacle_free(traj_i)
+                and all(world.in_bound(traj_i[:2, k]) for k in range(traj_i.shape[1]))
+                for traj_i in new_paths
+            ]
+        )[0]
         valid_new_paths = [new_paths[i] for i in new_free]
 
         if valid_new_paths:
@@ -137,64 +115,112 @@ def rrt_diff(start, goal, u_c, sim, world, opts):
         return valid_new_paths, dist_to_x_rand
 
     def distance_fcn(x1, x2):
-        """Function for computing the distance between states x1 and x2, where
-        x1 and x2 can be matrices with several state vectors, treating
-        all states equally"""
+        """Distance between states, with an optional wrapped heading penalty."""
         d2 = x1 - x2
-        return np.sqrt(d2[0] ** 2 + d2[1] ** 2)
+        dtheta = np.arctan2(np.sin(d2[2]), np.cos(d2[2]))
+        return np.sqrt(d2[0] ** 2 + d2[1] ** 2 + (heading_weight * dtheta) ** 2)
 
-    # Start time measurement and define variables for nodes, parents, and
-    # associated trajectories
     T = Timer()
     T.tic()
-    nodes = start.reshape((-1, 1))  # Make numpy column vector
-    parents = [0]  # Initial state has no parent
-    state_trajectories = [start]  # No trajectory segment needed to reach start state
+    nodes = start.reshape((-1, 1))
+    parents = [0]
+    state_trajectories = [start]
 
+    for _ in range(opts["K"]):
+        x_rand = sample_free()
+        idx_nearest = nearest(x_rand)
+        x_nearest = nodes[:, idx_nearest]
 
+        candidate_paths, candidate_distances = steer_candidates(x_nearest, x_rand)
+        if not candidate_paths:
+            continue
+
+        idx_best = int(np.argmin(candidate_distances))
+        best_path = candidate_paths[idx_best]
+        x_new = best_path[:, -1]
+
+        nodes = np.column_stack((nodes, x_new))
+        parents.append(idx_nearest)
+        state_trajectories.append(best_path)
+
+        if opts["eps"] > 0 and distance_fcn(x_new, goal) < opts["eps"]:
+            break
 
     Tplan = T.toc()
     goal_idx = np.argmin(distance_fcn(nodes, goal[:, None]), axis=0)
     return goal_idx, nodes, parents, state_trajectories, Tplan
 
 
-# Run the planner
-
-start = np.array([1, 0, np.pi / 4])  # Start state (x,y,th)
-goal = np.array([6.5, 9, np.pi / 2])  # Goal state (x,y,th)
-
-# Define the possible control inputs
-u_c = np.linspace(-np.pi / 4, np.pi / 4, 11)
-
-# Define parameters and data structures
-
 opts = {
     "beta": 0.05,  # Probability of selecting goal state as target state
-    "lambda": 0.1,  # Step size (in time)
-    "eps": -0.01,  # Threshold for stopping the search (negative for full search)
-    "K": 4000,
-}  # Maximum number of iterations
+    "lambda": 0.05,  # Step size (in time)
+    "eps": 1.0,  # Threshold for stopping the search (negative for full search)
+    "K": 50000,
+    "seed": 42,
+}
 
-goal_idx, nodes, parents, state_trajectories, Tplan = rrt_diff(
-    start, goal, u_c, sim_car, world, opts
-)
-print(f"Finished in {Tplan:.2f} s")
+experiment = "control_set"  # "control_set" (Exercise 4.11) or "heading_weight" (Exercise 4.10)
+
+if experiment == "control_set":
+    active_opts = {**opts, "eps": -0.01, "K": 4000}
+    experiment_cases = [(1.0, count) for count in (3, 5, 11, 21)]
+elif experiment == "heading_weight":
+    active_opts = {**opts, "eps": 1.0}
+    experiment_cases = [(weight, 11) for weight in (0.0, 0.3, 1.0, 2.0, 3.0)]
+else:
+    raise ValueError("experiment must be 'control_set' or 'heading_weight'")
 
 
-# %% Plots and Analysis
+# %% Plots
 
-# Hint on plotting: To plot the path corresponding to the found solution,
-# the following code could be useful (utilizing backtracking from the goal
-# node:
-# drawlines = []
-# idx = goal_idx
-# while idx != 0:
-#     traj_i = state_trajectories[idx]
-#     drawlines.append(traj_i[0])
-#     drawlines.append(traj_i[1])
-#     idx = parents[idx]
-# _, ax = plt.subplots(num=99, clear=True)
-# ax.plot(*drawlines, color='b', lw=4)
+def plot_rrt_result(goal_idx, parents, state_trajectories, weight, num_controls, options, figure_number):
+    """Plot one tree and its backtracked solution path for an experiment case."""
+    fig, ax = plt.subplots(num=figure_number, clear=True)
+    world.draw(ax=ax)
+
+    for idx in range(1, len(state_trajectories)):
+        trajectory = state_trajectories[idx]
+        ax.plot(trajectory[0], trajectory[1], color="0.65", lw=0.6,
+                label="RRT tree" if idx == 1 else None)
+
+    idx = goal_idx
+    first_solution_edge = True
+    while idx != 0:
+        trajectory = state_trajectories[idx]
+        ax.plot(trajectory[0], trajectory[1], color="tab:blue", lw=2.5,
+                label="Planned path" if first_solution_edge else None)
+        first_solution_edge = False
+        idx = parents[idx]
+
+    ax.plot(start[0], start[1], "go", ms=7, label="Start")
+    ax.plot(goal[0], goal[1], "r*", ms=10, label="Goal")
+    ax.set(xlim=(world.xmin, world.xmax), ylim=(world.ymin, world.ymax),
+           xlabel="x", ylabel="y")
+    ax.set_aspect("equal", adjustable="box")
+    distance_label = "position only" if weight == 0 else f"position + heading ({weight:g} m/rad)"
+    termination_label = "K iterations" if options["eps"] <= 0 else f"eps = {options['eps']:g}"
+    ax.set_title(
+        f"RRT car - {distance_label}, {num_controls} controls\n"
+        f"{termination_label}, time step = {options['lambda']:g}"
+    )
+    ax.legend(loc="best")
+
+
+results = []
+for figure_number, (weight, num_controls) in enumerate(experiment_cases, start=99):
+    heading_weight = weight
+    u_c = np.linspace(-np.pi / 4, np.pi / 4, num_controls)
+    goal_idx, nodes, parents, state_trajectories, Tplan = rrt_diff(
+        start, goal, u_c, sim_car, world, active_opts
+    )
+    results.append((weight, num_controls, goal_idx, nodes, parents, state_trajectories, Tplan))
+    print(
+        f"heading_weight={weight:g}, controls={num_controls}: "
+        f"{nodes.shape[1]} nodes, {Tplan:.2f} s"
+    )
+    plot_rrt_result(
+        goal_idx, parents, state_trajectories, weight, num_controls, active_opts, figure_number
+    )
 
 
 # %%
