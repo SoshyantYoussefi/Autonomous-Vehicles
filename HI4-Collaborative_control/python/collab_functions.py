@@ -66,9 +66,15 @@ class AgentFormation:
                 self.measurement_graph.append(self.agent_idx[agent_edges[0][0]])
                 self.absolute_measurement[idx] = True
             else:
-                self.measurement_graph.append(
-                    np.array([np.vstack((self.agent_idx[edg[0]], self.agent_idx[edg[1]])) for edg in agent_edges])
-                )
+                relative_edges = [
+                    np.vstack((self.agent_idx[edg[0]], self.agent_idx[edg[1]]))
+                    for edg in agent_edges
+                ]
+                if relative_edges:
+                    self.measurement_graph.append(np.array(relative_edges))
+                else:
+                    # A vertex with no incoming edges has no relative measurements.
+                    self.measurement_graph.append(np.empty((0, 2, n), dtype=int))
 
     def h_state(self, x, meas_idx):
         return x[meas_idx]  # Measure state directly
