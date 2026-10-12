@@ -26,7 +26,7 @@ def load_config(config: str) -> dict:
         config += ".yml"
 
     # check if file exists in "configs":
-    config_path = Path("trajectory_prediction/configs")
+    config_path = Path(__file__).resolve().parent / "configs"
 
     # get all files in subdirectory
     files = [f for f in config_path.iterdir() if f.is_file()]
@@ -72,7 +72,7 @@ def load_pretrained_model(modality: str = "UM", version: str = "V1", extra: str 
 
     mdl_name = f"TrajNet{add}.ckpt"
     # mdl_name = f"TrajNet-{version}-{modality}" + add + ".ckpt"
-    mdl_path = os.path.join("trajectory_prediction/saved_models", dataset, mdl_name)
+    mdl_path = Path(__file__).resolve().parent / "saved_models" / dataset / mdl_name
     ckpt = torch.load(mdl_path, map_location=device, weights_only=True)
     model.load_state_dict(ckpt["state_dict"], strict=False)
 

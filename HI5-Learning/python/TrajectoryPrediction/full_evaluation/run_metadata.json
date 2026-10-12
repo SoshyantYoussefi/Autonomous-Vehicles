@@ -1,0 +1,10 @@
+{
+  "counts": {
+    "batches": 279,
+    "scenarios": 8925,
+    "scored_agents": 68962
+  },
+  "total_seconds": 249.1521910999436,
+  "threads": 4,
+  "torch": "2.4.1+cpu"
+}
